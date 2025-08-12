@@ -1,0 +1,171 @@
+using Microsoft.AspNetCore.Mvc;
+using System.Threading.Tasks;
+using FirefliesBackend.Data;
+using FirefliesBackend.Models;
+using Microsoft.EntityFrameworkCore;
+using System.Text;
+using System;
+using System.Linq;
+using System.Net.Http;
+using System.Net.Http.Headers;
+using System.Threading;
+
+namespace FirefliesBackend.Controllers
+{
+    [ApiController]
+    [Route("api/meetings")]
+    public class MeetingsController : ControllerBase
+    {
+        private readonly AppDbContext _db;
+        private readonly IHttpClientFactory _httpClientFactory;
+        private readonly string _openAiApiKey;
+
+        public MeetingsController(AppDbContext db, IHttpClientFactory httpClientFactory, IConfiguration config)
+        {
+            _db = db;
+            _httpClientFactory = httpClientFactory;
+            _openAiApiKey = config["OpenAI:ApiKey"]; // Store in appsettings.Development.json or secrets.json
+        }
+
+        [HttpGet]
+        public async Task<IActionResult> GetAllMeetings()
+        {
+            var meetings = await _db.Meetings
+                .OrderByDescending(m => m.CreatedAt)
+                .Select(m => new
+                {
+                    id = m.Id,
+                    firefliesId = m.FirefliesId,
+                    title = m.Title,
+                    createdAt = m.CreatedAt,
+                    summary = m.Summary
+                })
+                .ToListAsync();
+
+            return Ok(meetings);
+        }
+
+        [HttpGet("{id}/download-summary")]
+        public async Task<IActionResult> DownloadSummary(int id)
+        {
+            var meeting = await _db.Meetings.FirstOrDefaultAsync(m => m.Id == id);
+            if (meeting == null)
+                return NotFound("Meeting not found");
+
+            // Build text file content
+            var textContent = $"Meeting Title: {meeting.Title}\nDate: {meeting.MeetingDate}\n\nSummary:\n{meeting.Summary}";
+
+            // Return as downloadable .txt
+            var bytes = Encoding.UTF8.GetBytes(textContent);
+            return File(bytes, "text/plain", "summary.txt");
+        }
+
+        [HttpPost("{id}/send-to-openai")]
+        public async Task<IActionResult> SendSummaryToOpenAi(int id)
+        {
+            var meeting = await _db.Meetings.FirstOrDefaultAsync(m => m.Id == id);
+            if (meeting == null)
+                return NotFound("Meeting not found");
+
+            // Create .txt content (runtime only)
+            var textContent = $"Meeting Title: {meeting.Title}\nDate: {meeting.MeetingDate}\n\nSummary:\n{meeting.Summary}";
+
+            var httpClient = _httpClientFactory.CreateClient();
+            httpClient.DefaultRequestHeaders.Authorization = new AuthenticationHeaderValue("Bearer", _openAiApiKey);
+
+            // Send to OpenAI for processing
+            var requestBody = new
+            {
+                model = "gpt-4o-mini", // or your desired model
+                messages = new[]
+                {
+                    new { role = "system", content = "You are a helpful assistant that turns meeting summaries into functional docs, mockups, and markdown." },
+                    new { role = "user", content = $"Here is the meeting summary:\n\n{textContent}\n\nPlease generate:\n1. A functional document\n2. Mockup descriptions\n3. A markdown version" }
+                }
+            };
+
+            var response = await httpClient.PostAsJsonAsync("https://api.openai.com/v1/chat/completions", requestBody);
+
+            if (!response.IsSuccessStatusCode)
+                return StatusCode((int)response.StatusCode, await response.Content.ReadAsStringAsync());
+
+            var result = await response.Content.ReadAsStringAsync();
+            return Ok(result);
+        }
+
+        [HttpPost("upsert")]
+        public async Task<IActionResult> UpsertMeeting([FromBody] SaveMeetingDto dto)
+        {
+            if (dto == null || string.IsNullOrWhiteSpace(dto.FirefliesId))
+            {
+                return BadRequest("Invalid payload - FirefliesId required.");
+            }
+
+            try
+            {
+                var meeting = await _db.Meetings.FirstOrDefaultAsync(m => m.FirefliesId == dto.FirefliesId);
+
+                if (meeting == null)
+                {
+                    meeting = new Meeting
+                    {
+                        FirefliesId = dto.FirefliesId,
+                        Title = dto.Title ?? "",
+                        MeetingDate = dto.MeetingDate,
+                        DurationSeconds = (int)Math.Round(dto.DurationSeconds),
+                        TranscriptJson = dto.TranscriptJson ?? "",
+                        Summary = dto.Summary ?? ""
+                    };
+                    _db.Meetings.Add(meeting);
+                    await _db.SaveChangesAsync();
+
+                    return Ok(new { id = meeting.Id, firefliesId = meeting.FirefliesId });
+                }
+
+                meeting.Title = dto.Title ?? meeting.Title;
+                meeting.MeetingDate = dto.MeetingDate ?? meeting.MeetingDate;
+                meeting.DurationSeconds = (int)Math.Round(dto.DurationSeconds);
+                meeting.TranscriptJson = dto.TranscriptJson ?? meeting.TranscriptJson;
+                meeting.Summary = dto.Summary ?? meeting.Summary;
+
+                await _db.SaveChangesAsync();
+
+                return Ok(new { id = meeting.Id, firefliesId = meeting.FirefliesId });
+            }
+            catch (Exception ex)
+            {
+                Console.WriteLine("DB Upsert failed: " + ex);
+                return StatusCode(500, "Database save failed. Check server logs.");
+            }
+        }
+
+        [HttpGet("{id}")]
+        public async Task<IActionResult> GetById(int id)
+        {
+            var m = await _db.Meetings.FindAsync(id);
+            if (m == null) return NotFound();
+            return Ok(m);
+        }
+
+        [HttpPut("{id}/summary")]
+        public async Task<IActionResult> UpdateSummary(int id, [FromBody] UpdateSummaryDto dto)
+        {
+            var m = await _db.Meetings.FindAsync(id);
+            if (m == null) return NotFound();
+            m.Summary = dto.Summary;
+            await _db.SaveChangesAsync();
+            return NoContent();
+        }
+    }
+
+    public record SaveMeetingDto(
+        string FirefliesId,
+        string Title,
+        DateTime? MeetingDate,
+        double DurationSeconds,
+        string TranscriptJson,
+        string Summary
+    );
+
+    public record UpdateSummaryDto(string Summary);
+}
