@@ -29,6 +29,15 @@ builder.Services.AddHttpClient<IFirefliesClient, FirefliesClient>(client =>
     );
 });
 
+// Register OpenAI HTTP client
+builder.Services.AddHttpClient("OpenAI", client =>
+{
+    client.BaseAddress = new Uri("https://api.openai.com/");
+    client.DefaultRequestHeaders.Accept.Add(
+        new System.Net.Http.Headers.MediaTypeWithQualityHeaderValue("application/json")
+    );
+});
+
 // CORS for React dev
 builder.Services.AddCors(o => o.AddPolicy("AllowReactDev", p =>
     p.WithOrigins("http://localhost:5173").AllowAnyHeader().AllowAnyMethod()
@@ -42,4 +51,4 @@ app.UseCors("AllowReactDev");
 app.UseAuthorization();
 app.MapControllers();
 
-app.Run();
+app.Run();  

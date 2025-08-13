@@ -247,3 +247,7 @@ D:\VIRIM\f\FirefliesApp\FirefliesBackend\obj\Debug\net8.0\refint\FirefliesBacken
 D:\VIRIM\f\FirefliesApp\FirefliesBackend\obj\Debug\net8.0\FirefliesBackend.pdb
 D:\VIRIM\f\FirefliesApp\FirefliesBackend\obj\Debug\net8.0\FirefliesBackend.genruntimeconfig.cache
 D:\VIRIM\f\FirefliesApp\FirefliesBackend\obj\Debug\net8.0\ref\FirefliesBackend.dll
+D:\VIRIM\f\FirefliesApp\FirefliesBackend\obj\Debug\net8.0\FirefliesBackend.sourcelink.json
+D:\VIRIM\f\FirefliesApp\FirefliesBackend\bin\Debug\net8.0\OpenAI.dll
+D:\VIRIM\f\FirefliesApp\FirefliesBackend\bin\Debug\net8.0\System.ClientModel.dll
+D:\VIRIM\f\FirefliesApp\FirefliesBackend\bin\Debug\net8.0\System.Memory.Data.dll

@@ -14,7 +14,7 @@ using System.Reflection;
 [assembly: System.Reflection.AssemblyCompanyAttribute("FirefliesBackend")]
 [assembly: System.Reflection.AssemblyConfigurationAttribute("Debug")]
 [assembly: System.Reflection.AssemblyFileVersionAttribute("1.0.0.0")]
-[assembly: System.Reflection.AssemblyInformationalVersionAttribute("1.0.0")]
+[assembly: System.Reflection.AssemblyInformationalVersionAttribute("1.0.0+76e0ff3a3c3728af4ec20030dd684c390cbe02be")]
 [assembly: System.Reflection.AssemblyProductAttribute("FirefliesBackend")]
 [assembly: System.Reflection.AssemblyTitleAttribute("FirefliesBackend")]
 [assembly: System.Reflection.AssemblyVersionAttribute("1.0.0.0")]

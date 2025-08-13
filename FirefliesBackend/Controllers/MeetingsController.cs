@@ -8,7 +8,7 @@ using System;
 using System.Linq;
 using System.Net.Http;
 using System.Net.Http.Headers;
-using System.Threading;
+using System.Text.Json;
 
 namespace FirefliesBackend.Controllers
 {
@@ -24,8 +24,11 @@ namespace FirefliesBackend.Controllers
         {
             _db = db;
             _httpClientFactory = httpClientFactory;
-            _openAiApiKey = config["OpenAI:ApiKey"]; // Store in appsettings.Development.json or secrets.json
+            _openAiApiKey = config["OpenAI:ApiKey"];
         }
+
+        // ✅ Cross-platform UTC → IST conversion
+        
 
         [HttpGet]
         public async Task<IActionResult> GetAllMeetings()
@@ -38,6 +41,7 @@ namespace FirefliesBackend.Controllers
                     firefliesId = m.FirefliesId,
                     title = m.Title,
                     createdAt = m.CreatedAt,
+                    meetingDate = m.MeetingDate, // ✅ Now returns IST
                     summary = m.Summary
                 })
                 .ToListAsync();
@@ -52,10 +56,7 @@ namespace FirefliesBackend.Controllers
             if (meeting == null)
                 return NotFound("Meeting not found");
 
-            // Build text file content
             var textContent = $"Meeting Title: {meeting.Title}\nDate: {meeting.MeetingDate}\n\nSummary:\n{meeting.Summary}";
-
-            // Return as downloadable .txt
             var bytes = Encoding.UTF8.GetBytes(textContent);
             return File(bytes, "text/plain", "summary.txt");
         }
@@ -67,16 +68,14 @@ namespace FirefliesBackend.Controllers
             if (meeting == null)
                 return NotFound("Meeting not found");
 
-            // Create .txt content (runtime only)
             var textContent = $"Meeting Title: {meeting.Title}\nDate: {meeting.MeetingDate}\n\nSummary:\n{meeting.Summary}";
 
-            var httpClient = _httpClientFactory.CreateClient();
+            var httpClient = _httpClientFactory.CreateClient("OpenAI");
             httpClient.DefaultRequestHeaders.Authorization = new AuthenticationHeaderValue("Bearer", _openAiApiKey);
 
-            // Send to OpenAI for processing
             var requestBody = new
             {
-                model = "gpt-4o-mini", // or your desired model
+                model = "gpt-4o-mini",
                 messages = new[]
                 {
                     new { role = "system", content = "You are a helpful assistant that turns meeting summaries into functional docs, mockups, and markdown." },
@@ -84,67 +83,129 @@ namespace FirefliesBackend.Controllers
                 }
             };
 
-            var response = await httpClient.PostAsJsonAsync("https://api.openai.com/v1/chat/completions", requestBody);
-
+            var response = await httpClient.PostAsJsonAsync("v1/chat/completions", requestBody);
             if (!response.IsSuccessStatusCode)
                 return StatusCode((int)response.StatusCode, await response.Content.ReadAsStringAsync());
 
-            var result = await response.Content.ReadAsStringAsync();
-            return Ok(result);
+            var jsonResponse = await response.Content.ReadAsStringAsync();
+            using var doc = JsonDocument.Parse(jsonResponse);
+            var content = doc.RootElement
+                .GetProperty("choices")[0]
+                .GetProperty("message")
+                .GetProperty("content")
+                .GetString();
+
+            return Ok(new { generatedContent = content });
         }
 
         [HttpPost("upsert")]
-        public async Task<IActionResult> UpsertMeeting([FromBody] SaveMeetingDto dto)
+public async Task<IActionResult> UpsertMeeting([FromBody] SaveMeetingDto dto)
+{
+    if (dto == null || string.IsNullOrWhiteSpace(dto.FirefliesId))
+        return BadRequest("Invalid payload - FirefliesId required.");
+
+    try
+    {
+        var meeting = await _db.Meetings.FirstOrDefaultAsync(m => m.FirefliesId == dto.FirefliesId);
+        
+        // Use a local variable to safely handle the date
+        DateTime meetingDateToSave = dto.MeetingDate.HasValue ? dto.MeetingDate.Value : DateTime.UtcNow;
+
+        if (meeting == null)
         {
-            if (dto == null || string.IsNullOrWhiteSpace(dto.FirefliesId))
+            meeting = new Meeting
             {
-                return BadRequest("Invalid payload - FirefliesId required.");
-            }
-
-            try
-            {
-                var meeting = await _db.Meetings.FirstOrDefaultAsync(m => m.FirefliesId == dto.FirefliesId);
-
-                if (meeting == null)
-                {
-                    meeting = new Meeting
-                    {
-                        FirefliesId = dto.FirefliesId,
-                        Title = dto.Title ?? "",
-                        MeetingDate = dto.MeetingDate,
-                        DurationSeconds = (int)Math.Round(dto.DurationSeconds),
-                        TranscriptJson = dto.TranscriptJson ?? "",
-                        Summary = dto.Summary ?? ""
-                    };
-                    _db.Meetings.Add(meeting);
-                    await _db.SaveChangesAsync();
-
-                    return Ok(new { id = meeting.Id, firefliesId = meeting.FirefliesId });
-                }
-
-                meeting.Title = dto.Title ?? meeting.Title;
-                meeting.MeetingDate = dto.MeetingDate ?? meeting.MeetingDate;
-                meeting.DurationSeconds = (int)Math.Round(dto.DurationSeconds);
-                meeting.TranscriptJson = dto.TranscriptJson ?? meeting.TranscriptJson;
-                meeting.Summary = dto.Summary ?? meeting.Summary;
-
-                await _db.SaveChangesAsync();
-
-                return Ok(new { id = meeting.Id, firefliesId = meeting.FirefliesId });
-            }
-            catch (Exception ex)
-            {
-                Console.WriteLine("DB Upsert failed: " + ex);
-                return StatusCode(500, "Database save failed. Check server logs.");
-            }
+                FirefliesId = dto.FirefliesId,
+                Title = dto.Title ?? "",
+                MeetingDate = meetingDateToSave, // Use the non-nullable variable
+                DurationSeconds = (int)Math.Round(dto.DurationSeconds),
+                TranscriptJson = dto.TranscriptJson ?? "",
+                Summary = dto.Summary ?? ""
+            };
+            _db.Meetings.Add(meeting);
         }
+        else
+        {
+            meeting.Title = dto.Title ?? meeting.Title;
+            meeting.MeetingDate = meetingDateToSave; // Use the non-nullable variable
+            meeting.DurationSeconds = (int)Math.Round(dto.DurationSeconds);
+            meeting.TranscriptJson = dto.TranscriptJson ?? meeting.TranscriptJson;
+            meeting.Summary = dto.Summary ?? meeting.Summary;
+        }
+
+        await _db.SaveChangesAsync();
+        return Ok(new { id = meeting.Id, firefliesId = meeting.FirefliesId });
+    }
+    catch (DbUpdateException dbEx) // Catch specific EF Core exceptions
+    {
+        Console.Error.WriteLine($"DbUpdateException: {dbEx.Message}");
+        if (dbEx.InnerException != null)
+        {
+            Console.Error.WriteLine($"Inner Exception: {dbEx.InnerException.Message}");
+        }
+        return StatusCode(500, "Database save failed. Check server logs.");
+    }
+    catch (Exception ex)
+    {
+        Console.WriteLine("DB Upsert failed: " + ex);
+        return StatusCode(500, "Database save failed. Check server logs.");
+    }
+}
 
         [HttpGet("{id}")]
         public async Task<IActionResult> GetById(int id)
         {
             var m = await _db.Meetings.FindAsync(id);
             if (m == null) return NotFound();
-            return Ok(m);
+
+            return Ok(new
+            {
+                m.Id,
+                m.FirefliesId,
+                m.Title,
+                meetingDate = m.MeetingDate,
+                m.DurationSeconds,
+                m.Summary,
+                m.TranscriptJson
+            });
+        }
+
+        [HttpPost("{id}/generate-summary")]
+        public async Task<IActionResult> GenerateAISummary(int id)
+        {
+            var meeting = await _db.Meetings.FindAsync(id);
+            if (meeting == null)
+                return NotFound("Meeting not found.");
+
+            var client = _httpClientFactory.CreateClient();
+            client.DefaultRequestHeaders.Authorization = new AuthenticationHeaderValue("Bearer", _openAiApiKey);
+            var prompt = $"Summarize the following meeting:\n{meeting.Summary}";
+
+            var requestBody = new
+            {
+                model = "gpt-3.5-turbo",
+                messages = new[]
+                {
+                    new { role = "system", content = "You are a helpful assistant." },
+                    new { role = "user", content = prompt }
+                }
+            };
+
+            var content = new StringContent(JsonSerializer.Serialize(requestBody), Encoding.UTF8, "application/json");
+            var response = await client.PostAsync("https://api.openai.com/v1/chat/completions", content);
+
+            if (!response.IsSuccessStatusCode)
+                return StatusCode((int)response.StatusCode, await response.Content.ReadAsStringAsync());
+
+            var json = await response.Content.ReadAsStringAsync();
+            using var doc = JsonDocument.Parse(json);
+            var aiSummary = doc.RootElement
+                .GetProperty("choices")[0]
+                .GetProperty("message")
+                .GetProperty("content")
+                .GetString();
+
+            return Ok(new { aiSummary });
         }
 
         [HttpPut("{id}/summary")]

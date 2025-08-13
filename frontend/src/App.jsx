@@ -4,6 +4,7 @@ import MeetingList from "./MeetingList";
 import MeetingDetail from "./MeetingDetail";
 import SavedMeetings from "./SavedMeetings";
 
+
 export default function App() {
   return (
     <BrowserRouter>
@@ -33,6 +34,7 @@ export default function App() {
             <Route path="/meetings" element={<MeetingList />} />
             <Route path="/meetings/:id" element={<MeetingDetail />} />
             <Route path="/saved" element={<SavedMeetings />} />
+           
           </Routes>
         </main>
       </div>
